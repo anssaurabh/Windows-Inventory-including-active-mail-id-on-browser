@@ -1,0 +1,31 @@
+$chromePath = "$env:LOCALAPPDATA\Google\Chrome\User Data"
+$profiles = Get-ChildItem -Path $chromePath -Directory | Where-Object { $_.Name -like "Profile*" -or $_.Name -eq "Default" }
+
+$output = @()
+
+foreach ($profile in $profiles) {
+    $loginFile = "$chromePath\$($profile.Name)\Preferences"
+    if (Test-Path $loginFile) {
+        $json = Get-Content $loginFile -Raw | ConvertFrom-Json
+
+        # Account info might not exist in all profiles
+        if ($json.account_info) {
+            foreach ($acct in $json.account_info) {
+                $output += "Profile: $($profile.Name)"
+                $output += "Email  : $($acct.email)"
+                $output += ""
+            }
+        } else {
+            $output += "Profile: $($profile.Name)"
+            $output += "Email  : Not Found"
+            $output += ""
+        }
+    }
+}
+
+# Save to file
+$reportPath = "$env:USERPROFILE\Desktop\Chrome_LoggedInAccounts.txt"
+$output | Out-File -FilePath $reportPath -Encoding UTF8
+
+# Open the report in Notepad
+Start-Process notepad.exe $reportPath
