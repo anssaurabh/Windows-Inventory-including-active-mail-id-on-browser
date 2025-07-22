@@ -1,0 +1,85 @@
+# ===== ASSET REPORT SCRIPT WITH GITHUB UPLOAD =====
+
+# Asset details collection (same as before)
+$report = @()
+$hostname = $env:COMPUTERNAME
+$username = $env:USERNAME
+$mac = (Get-NetAdapter | Where-Object {$_.Status -eq "Up"} | Select-Object -First 1).MacAddress
+$computerSystem = Get-CimInstance Win32_ComputerSystem
+$bios = Get-CimInstance Win32_BIOS
+$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+$os = Get-CimInstance Win32_OperatingSystem
+$gpu = Get-CimInstance Win32_VideoController
+$storage = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
+    Measure-Object -Property Size -Sum
+$totalStorageGB = [math]::Round($storage.Sum / 1GB, 2)
+$o365 = Get-ItemProperty "HKLM:\Software\Microsoft\Office\ClickToRun\Configuration" -ErrorAction SilentlyContinue
+$officeStatus = if ($o365) { "Installed (Office 365)" } else { "Not Installed" }
+$av = Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName AntivirusProduct -ErrorAction SilentlyContinue
+$avStatus = if ($av) { ($av | Select-Object -ExpandProperty displayName -Unique) -join ', ' } else { "No Antivirus Detected" }
+
+# Basic Report
+$report += "===== IT ASSET REPORT ====="
+$report += "Hostname            : $hostname"
+$report += "User                : $hostname\$username"
+$report += "MAC Address         : $mac"
+$report += "Device Type         : Notebook"
+$report += "Model               : $($computerSystem.Model)"
+$report += "Serial Number       : $($bios.SerialNumber)"
+$report += "CPU                 : $($cpu.Name)"
+$report += "RAM (GB)            : $([math]::Round($computerSystem.TotalPhysicalMemory / 1GB))"
+$report += "Storage (GB)        : $totalStorageGB"
+$report += "GPU                 : $($gpu.Name)"
+$report += "OS                  : $($os.Caption) $($os.OSArchitecture)"
+$report += "Office 365          : $officeStatus"
+$report += "Antivirus           : $avStatus"
+$report += ""
+
+# Chrome Logged-in Accounts
+$chromePath = "$env:LOCALAPPDATA\Google\Chrome\User Data"
+$profiles = Get-ChildItem -Path $chromePath -Directory | Where-Object { $_.Name -like "Profile*" -or $_.Name -eq "Default" }
+$report += "===== CHROME LOGGED-IN ACCOUNTS ====="
+foreach ($profile in $profiles) {
+    $loginFile = "$chromePath\$($profile.Name)\Preferences"
+    if (Test-Path $loginFile) {
+        $json = Get-Content $loginFile -Raw | ConvertFrom-Json
+        $report += "Profile: $($profile.Name)"
+        if ($json.account_info) {
+            foreach ($acct in $json.account_info) {
+                $report += "Email  : $($acct.email)"
+            }
+        } else {
+            $report += "Email  : Not Found"
+        }
+        $report += ""
+    }
+}
+$report += "`nReport Generated On: $(Get-Date)"
+
+# Save report locally
+$localPath = "$env:TEMP\Asset_Report_$hostname.txt"
+$report | Out-File -FilePath $localPath -Encoding UTF8
+
+# GitHub Upload
+$token = "ghp_YOUR_PERSONAL_ACCESS_TOKEN"  # 🔒 Replace with real token
+$username = "your-github-username"
+$repo = "IT-AssetReports"
+$fileName = "Asset_Report_$hostname.txt"
+$apiUrl = "https://api.github.com/repos/$username/$repo/contents/$fileName"
+
+# Encode file content
+$fileContent = Get-Content $localPath -Raw
+$fileBytes = [System.Text.Encoding]::UTF8.GetBytes($fileContent)
+$base64 = [Convert]::ToBase64String($fileBytes)
+
+# Create JSON payload
+$json = @{
+  message = "Upload asset report from $hostname"
+  content = $base64
+} | ConvertTo-Json -Depth 10
+
+# Upload via GitHub API
+Invoke-RestMethod -Uri $apiUrl -Method Put -Headers @{ Authorization = "token $token" } -Body $json
+
+# Optional: Confirmation
+Write-Host "Report uploaded to GitHub successfully: $fileName"
